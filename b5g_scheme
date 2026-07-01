@@ -1,150 +1,53 @@
-import hashlib
-import secrets
-import time
+B5Grids: Detailed Construction
+The B5Grids scheme is based on novel RSA- and identity-based schemes with location-based zero-
+knowledge proof, providing a secure and efficient authentication scheme for offshore power grids.
+The detailed construction of the proposed scheme is as follows.
 
 
-def H1(data: str, n: int) -> int:
-    """Hash to Z*_n"""
-    digest = hashlib.sha256(data.encode()).hexdigest()
-    return int(digest, 16) % n
+Setup:
+This algorithm runs primarily on the control center CC as follows.
+– Let n = p · q be an RSA modulus
+– Let e be a public exponent, d the private exponent (only known to the KGC)
+– Let H1 : {0, 1}∗ → Z∗
+n be a cryptographic hash function
+– Generate RSA primes p, q, compute n = p · q, ϕ(n) = (p − 1)(q − 1)
+– Choose e with gcd(e, ϕ(n)) = 1 and compute d = e−1 mod ϕ(n)
+– Choose a generator g ∈ Z×
+n
+– Output M P K = (n, e, g), keep msk = d
 
 
-def modinv(a, m):
-    """Modular inverse"""
-    return pow(a, -1, m)
-    
-# -----------------------------
-# RSA Setup 
-# -----------------------------
-
-def generate_rsa(bits=512):
-    from sympy import randprime
-
-    p = randprime(2**(bits//2 - 1), 2**(bits//2))
-    q = randprime(2**(bits//2 - 1), 2**(bits//2))
-    n = p * q
-    phi = (p - 1) * (q - 1)
-
-    e = 65537
-    if phi % e == 0:
-        e = 3
-
-    d = modinv(e, phi)
-
-    # generator in Z*_n (simplified choice)
-    g = 2
-
-    MPK = (n, e, g)
-    MSK = d
-    return MPK, MSK
+KeyGen:
+This algorithm runs on the control center CC and offshore entity as follows.
+– Compute h = H1(ID)
+– Set private key sk = hd mod n
+– The corresponding public key is pk = gsk mod n; anyone can compute it from ID and M P K
+– The CC securely sends sk to the turbine
+Location proof π:
+This algorithm runs on the turbine side with 6G-APS as follows.
+– The 6G access points perform RTT and AoA measurements
+– From these, an estimated position pos is computed
+– A threshold k of APs collectively sign the statement “At time τ , device with temporary nonce
+had position pos within error ε”
+– The signed statement is π. The proof is verified by checking the signatures of the APs and
+ensuring that the region defined by (pos, ε) is a subset of the authorized area L
+Location-Based Authentication Scheme for 6G Cell-Free Offshore Power Grids 
 
 
-# -----------------------------
-# KeyGen
-# -----------------------------
-
-def keygen(ID, MSK, n, g):
-    h = H1(ID, n)
-    sk = pow(h, MSK, n)          # sk = h^d mod n
-    pk = pow(g, sk, n)           # pk = g^sk mod n
-    return sk, pk
+Signing:
+Given message m, private key sk, location proof π, current timestamp ts, and a random nonce r;
+then this algorithm runs on the CC and GE as follows.
+1. Compute c = H1(m ∥ π ∥ ts ∥ r)
+2. Compute signature σ = (sk)c mod n
+3. Output (σ, π, ts, r, ID)
+Note: The random nonce r is provided by the network to prevent replay attacks.
 
 
-# -----------------------------
-# Location Proof 
-# -----------------------------
-
-def generate_location_proof(ID, pos, L):
-    """
-    Simulates AP-based location proof π.
-    """
-    ts = int(time.time())
-
-    ap_signatures = []
-    for ap_id in range(5):  # assume 5 APs
-        msg = f"{ID}|{ts}|{pos}|{secrets.token_hex(4)}"
-        sig = hashlib.sha256(msg.encode()).hexdigest()
-        ap_signatures.append((ap_id, sig))
-
-    π = {
-        "position": pos,
-        "timestamp": ts,
-        "ap_sigs": ap_signatures,
-        "error_eps": 5,
-        "region": L
-    }
-
-    return π
-
-
-def verify_location_proof(π, L):
-    return π["region"] == L
-
-
-# -----------------------------
-# Signing
-# -----------------------------
-
-def sign_message(m, sk, π, ts, r, n):
-    c = H1(m + str(π) + str(ts) + str(r), n)
-    sigma = pow(sk, c, n)   # σ = sk^c mod n
-    return sigma, c
-
-
-# -----------------------------
-# Verification
-# -----------------------------
-
-def verify(m, sigma, π, ts, r, ID, MPK, authorized_IDs, L):
-    n, e, g = MPK
-
-    # 1. timestamp check (±5 sec)
-    if abs(int(time.time()) - ts) > 5:
-        return False
-
-    # 2. check ID authorized
-    if ID not in authorized_IDs:
-        return False
-
-    # 3. recompute h
-    h = H1(ID, n)
-
-    # 4. recompute c
-    c = H1(m + str(π) + str(ts) + str(r), n)
-
-    # 5. verify signature: σ^e ≡ h^c mod n
-    if pow(sigma, e, n) != pow(h, c, n):
-        return False
-
-    # 6. verify location proof
-    if not verify_location_proof(π, L):
-        return False
-
-    return True
-
-
-# -----------------------------
-# Example Usage
-# -----------------------------
-
-if __name__ == "__main__":
-    MPK, MSK = generate_rsa()
-    n, e, g = MPK
-
-    ID = "turbine_001"
-    authorized_IDs = [ID]
-    L = "offshore_zone_A"
-
-    sk, pk = keygen(ID, MSK, n, g)
-
-    m = "power_status_update"
-    ts = int(time.time())
-    r = secrets.token_hex(8)
-
-    π = generate_location_proof(ID, pos=(52.3, 4.9), L=L)
-
-    sigma, c = sign_message(m, sk, π, ts, r, n)
-
-    result = verify(m, sigma, π, ts, r, ID, MPK, authorized_IDs, L)
-
-    print("Signature valid?", result)
+Verification:
+Given (σ, π, ts, r, ID) and message m; then this algorithm runs on the CC and GE as follows.
+1. Check that ts is within an allowed window (±5 seconds)
+2. Compute h = H1(ID) from the authorized list
+3. Compute c = H1(m ∥ π ∥ ts ∥ r)
+4. Verify that σe ≡ hc (mod n)
+5. Verify π against the authorized area L for that ID
+6. Accept if holds. Otherwise, abort
